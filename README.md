@@ -6,21 +6,21 @@ End-to-end fine-tuning and production deployment of **Llama 3.1 8B Instruct** as
 - **Adapter weights:** [iamshubhshrma/llama-3.1-8b-customer-support on HF Hub](https://huggingface.co/iamshubhshrma/llama-3.1-8b-customer-support)
 - **Dataset:** [bitext/Bitext-customer-support-llm-chatbot-training-dataset](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset)
 
-![Gradio chat demo](docs/screenshots/gradio.png)
+![Gradio chat demo](screenshots/demo-1.png)
+
+![Gradio chat demo](screenshots/demo-2.png)
 
 ---
 
 ## Architecture
 
-![Architecture diagram](docs/architecture.png)
+![Architecture diagram](screenshots/architecture.png)
 
 Three flows make up the system:
 
 1. **Training** (one-time, SageMaker) — `train.py` runs QLoRA fine-tuning on `ml.g5.2xlarge`; the adapter is uploaded to S3 and pushed to HF Hub.
 2. **Request path** — Customer → Gradio (HF Spaces) → ALB `qlora-alb:8080` → Target Group `qlora-tg` → a FastAPI instance in ASG `qlora-asg` → vLLM (Llama 3.1 8B + `support-bot` LoRA).
 3. **Escalation path** — FastAPI keyword-detects intent. Escalation intents (`complaint`, `payment_issue`, `get_refund`, `contact_human_agent`, `get_human_agent`, `check_cancellation_fee`) are published to SQS `qlora-support-escalations` → consumed by Lambda `qlora-escalation-handler` → written to DynamoDB `qlora-support-logs` for human follow-up.
-
-Full architecture as code: [`infrastructure.json`](infrastructure.json) (CloudFormation). Source diagram: [`architecture.md`](architecture.md) (Mermaid).
 
 ---
 
@@ -65,10 +65,8 @@ pip install -r requirements-serve.txt
 python api_server.py                     # FastAPI on :8080, vLLM on :8000
 ```
 
-For the full production pipeline (SageMaker training → S3/HF Hub push → EC2 vLLM + FastAPI → SQS + Lambda + DynamoDB → ALB + ASG → HF Spaces), see:
+Full production pipeline : (SageMaker training → S3/HF Hub push → EC2 vLLM + FastAPI → SQS + Lambda + DynamoDB → ALB + ASG → HF Spaces)
 
-- **[`w2.md`](w2.md)** — full walkthrough via the AWS Console (recommended)
-- **[`WORKFLOW.md`](WORKFLOW.md)** — same pipeline via the AWS CLI
 
 ---
 
@@ -113,12 +111,7 @@ You are a helpful customer support agent. Answer the customer's question clearly
 ```
 .
 ├── README.md              # this file
-├── PROJECT.md             # design spec / source of truth
-├── WORKFLOW.md            # production pipeline (AWS CLI)
-├── w2.md                  # production pipeline (AWS Console)
-├── architecture.md        # Mermaid architecture diagram
 ├── infrastructure.json    # CloudFormation template for the whole stack
-├── CLAUDE.md              # repo guidance for AI-assisted development
 ├── train.py               # SFT training entrypoint
 ├── evaluate.py            # ROUGE-L + intent accuracy on 200-sample holdout
 ├── infer.py               # interactive CLI
@@ -157,13 +150,5 @@ Total one-time cost to build: **< $10** (SageMaker training ~$7 + EC2 demo ~$3).
 | v1.1 — 8B upgrade, SageMaker training, vLLM API on EC2 | Done |
 | v1.2 — SQS escalation pipeline + Lambda → DynamoDB | Done |
 | v1.3 — ALB + ASG fleet, Gradio demo on HF Spaces | Done |
-| v2.0 — DPO alignment pass for tone/safety | Planned |
-| v3.0 — Multi-turn conversation + retrieval augmentation | Planned |
 
 ---
-
-## License
-
-- Base model — [Meta Llama 3.1 Community License](https://llama.meta.com/llama3_1/license/)
-- Dataset — CC-BY-4.0
-- Adapter weights and code in this repo — MIT
