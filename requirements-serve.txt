@@ -1,0 +1,26 @@
+# Serving stack — install on the EC2 inference instance (g5.2xlarge).
+# Requires a CUDA build environment for FlashInfer JIT compilation:
+#
+#   sudo apt-get install -y ninja-build
+#
+# vLLM is heavy and pulls torch + CUDA wheels matched to the host CUDA version.
+# Install on top of the Deep Learning AMI's PyTorch environment, e.g.:
+#
+#   /opt/pytorch/bin/python -m pip install -r requirements-serve.txt
+
+# Inference engine
+vllm>=0.5
+
+# HTTP API
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.5
+
+# OpenAI client — used by api_server.py to call vLLM's OpenAI-compatible API
+openai>=1.30
+
+# Async HTTP (used by Gradio Space + FastAPI)
+httpx>=0.27
+
+# AWS — SQS escalation publishing from FastAPI
+boto3>=1.34

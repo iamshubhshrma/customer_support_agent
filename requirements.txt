@@ -1,0 +1,27 @@
+# Training, evaluation, and local inference dependencies.
+# Use this for: train.py, evaluate.py, infer.py, notebook.ipynb, data/prepare.py
+# For the EC2 serving stack (vLLM + FastAPI), see requirements-serve.txt.
+
+# Core ML
+torch>=2.1
+transformers>=4.45
+peft>=0.11
+trl>=0.12
+bitsandbytes>=0.43
+accelerate>=0.30
+
+# Dataset loading
+datasets>=2.18
+huggingface_hub>=0.23
+
+# Evaluation
+rouge-score>=0.1.2
+
+# Experiment tracking
+mlflow>=2.9
+
+# AWS (adapter upload to S3 from train.py / SageMaker notebook)
+boto3>=1.34
+
+# Transformers needs this in environments with Keras 3 installed
+tf-keras
