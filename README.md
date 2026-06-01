@@ -12,6 +12,70 @@ End-to-end fine-tuning and production deployment of **Llama 3.1 8B Instruct** as
 
 ---
 
+## Project Q&A
+
+### What problem is this project solving?
+
+Customer support is one of the highest-volume, most repetitive cost centers in e-commerce. A large share of inbound tickets are variations on a small set of intents — *where is my order, I want to cancel, I was charged twice, how do I reset my password, I want a refund* — yet they still consume human agent time and drive up response latency and operational cost. Generic, off-the-shelf LLMs can answer these but tend to be verbose, inconsistent in tone, and unaware of how a real support desk is expected to respond.
+
+This project solves that problem on two fronts:
+
+1. **Domain specialization without the cost of a giant model.** It fine-tunes **Llama 3.1 8B Instruct** on ~24k real-world-style support conversations (the Bitext dataset, covering 27 intents across 11 categories) so the model answers in the clear, polite, on-brand style of a support agent. Because it uses **QLoRA** (4-bit quantization + small LoRA adapters), the entire fine-tune fits on a single 24 GB GPU and produces a ~110 MB adapter instead of a multi-gigabyte model — cheap to train (the whole build cost under $10), cheap to store, and trivial to hot-swap onto a shared base model at serve time.
+
+2. **Knowing when *not* to answer.** A chatbot that confidently handles a refund dispute or a double-charge complaint on its own is a liability. The system therefore pairs the model with a real-time **escalation pipeline**: every request is scanned for sensitive intents (`complaint`, `payment_issue`, `get_refund`, `contact_human_agent`, `get_human_agent`, `check_cancellation_fee`) and those are routed through SQS → Lambda → DynamoDB into a human follow-up queue. The bot deflects the routine, high-volume questions automatically while guaranteeing that money- and trust-sensitive cases reach a person.
+
+The end result is a production-shaped reference implementation showing how to take an open-weight LLM from raw dataset to a deployed, auto-scaling, human-in-the-loop support agent.
+
+### What challenges were faced during this project and how were they tackled?
+
+**Fitting an 8B model onto a single GPU.** Full fine-tuning of an 8B model needs far more than the 24 GB available on the A10G used for training. This was solved with QLoRA: the frozen base model is loaded in **4-bit NF4 with double quantization** (cutting its footprint ~4×), and only LoRA adapters on the attention and MLP projection layers are trained — roughly 0.75% of parameters. Combined with gradient checkpointing and `paged_adamw_32bit`, peak training VRAM stays at ~18–20 GB, comfortably under the 24 GB ceiling, and a full epoch on 24k samples runs in ~4.4 hours.
+
+**Hardware constraints between dev and production.** The local dev box (RTX 4060 Laptop, 8 GB) can run 8B *inference* but cannot *train* 8B. The fix was a split workflow: develop and smoke-test on a smaller 3B model locally, then run the real 8B training job on AWS SageMaker `ml.g5.2xlarge`. The config auto-detects precision (`bf16` on Ampere+, `fp16` on T4) via `torch.cuda.is_bf16_supported()` so the same code runs correctly across T4, A10G, and 4090 without hardcoding.
+
+**Chat-template and label-masking correctness.** Early on, using a raw `### Human:/### Assistant:` format mismatches the Llama 3 Instruct model's expectations and degrades quality. The project standardizes on the exact Llama 3 Instruct template (`<|begin_of_text|>…<|eot_id|>`) and computes loss on **assistant tokens only** (masking prompt and `<pad>` tokens) so the model learns to respond rather than to parrot the prompt.
+
+**Avoiding sample cross-contamination.** Sequence packing maximizes GPU utilization but, without FlashAttention-2, lets tokens from one example attend to another. Since flash_attn isn't installed in this environment, **packing was disabled** (`PACKING = False`) to keep training signal clean, trading a little throughput for correctness.
+
+**Serving the adapter efficiently and safely.** Rather than merging and shipping a 6+ GB model, only the small adapter is pushed to S3 and HF Hub and **hot-loaded onto the base model by vLLM** at serve time, behind a FastAPI wrapper. To handle variable load, the inference fleet runs in an Auto Scaling Group behind an Application Load Balancer with `/health` checks. The escalation path was built to be dependency-free — a lightweight inline keyword detector inside FastAPI publishes to SQS — so it adds essentially zero latency and no extra ML inference to the request path.
+
+**Keeping VRAM and OOM under control as a repeatable procedure.** OOM during fine-tuning is the most common failure mode, so the project bakes in a documented escape hatch: drop `per_device_train_batch_size` to 1 and raise `gradient_accumulation_steps` to 8 to preserve the effective batch size, plus always pass `device_map="auto"` and set `model.config.use_cache = False` when gradient checkpointing is on (the two are incompatible).
+
+### What technologies and frameworks were used in the project?
+
+**Model training & fine-tuning**
+
+- **PyTorch** + **Hugging Face Transformers** (≥4.40) — base model loading and the Llama 3.1 8B Instruct architecture.
+- **PEFT** (≥0.10) — `LoraConfig` / `get_peft_model` for the LoRA adapters.
+- **BitsAndBytes** (≥0.43) — 4-bit NF4 quantization with double quant.
+- **TRL** (≥0.8) — `SFTTrainer` / `SFTConfig` to run supervised fine-tuning.
+- **Datasets** (≥2.18) — loading and splitting the Bitext customer-support dataset.
+
+**Evaluation & experiment tracking**
+
+- **MLflow** — automatic logging of hyperparameters, training/validation loss, and token accuracy (driven purely by `report_to="mlflow"`, no `mlflow.init()`).
+- **rouge_score** — ROUGE-L for generation quality, plus a keyword-based intent-accuracy check.
+
+**Serving & API**
+
+- **vLLM** (0.21) — continuous batching and LoRA hot-loading for high-throughput inference.
+- **FastAPI** + **Uvicorn** — the request wrapper, intent detection, and escalation trigger.
+- **Gradio** on **Hugging Face Spaces** — the public chat demo, calling the EC2 API through the load balancer.
+
+**AWS infrastructure**
+
+- **SageMaker** (`ml.g5.2xlarge`, A10G 24 GB) — the training compute.
+- **EC2** (`g5.2xlarge` spot) + **Auto Scaling Group** + **Application Load Balancer** — the auto-scaling inference fleet.
+- **S3** — adapter storage.
+- **SQS → Lambda (Python 3.12) → DynamoDB** — the real-time escalation pipeline (queue, consumer, and structured log store).
+- **CloudFormation** (`infrastructure.json`) — the stack as code.
+
+**Model & artifact distribution**
+
+- **Hugging Face Hub** (`huggingface_hub`) — hosting the LoRA adapter weights and model card.
+- **Bitext Customer Support dataset** (CC-BY-4.0) — the training data.
+
+---
+
 ## Architecture
 
 ![Architecture diagram](screenshots/architecture.png)
